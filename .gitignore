@@ -1,0 +1,9 @@
+/dist/
+/target/
+/Cargo.lock
+.vscode/
+
+# Downloaded binaries (use build.sh to download)
+src-tauri/binaries/rustfs-*
+!src-tauri/binaries/.gitkeep
+temp_downloads/

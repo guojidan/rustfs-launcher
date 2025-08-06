@@ -1,0 +1,2 @@
+# This file ensures the binaries directory is tracked by git
+# Binary files are downloaded by build.sh script
