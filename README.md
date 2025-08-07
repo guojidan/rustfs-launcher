@@ -10,11 +10,11 @@ A Tauri + Leptos application for launching RustFS.
 
 ## Building
 
-Before building the application, you need to download the required RustFS binaries:
+Before building the application, you need to download the required RustFS binary for your platform:
 
 ### On macOS/Linux:
 ```bash
-# Download required binaries
+# Download binary for current platform
 ./build.sh
 
 # Build for development
@@ -26,7 +26,7 @@ cargo tauri build
 
 ### On Windows:
 ```cmd
-# Download required binaries
+# Download binary for current platform
 build.bat
 
 # Build for development
@@ -36,10 +36,12 @@ cargo tauri dev
 cargo tauri build
 ```
 
-The build script will download the following binaries:
-- `rustfs-macos-aarch64` - macOS ARM64 binary
-- `rustfs-macos-x86_64` - macOS x86_64 binary  
-- `rustfs-windows-x86_64.exe` - Windows x86_64 binary
+The build script will automatically detect your platform and download the appropriate binary:
+- **macOS Apple Silicon**: `rustfs-macos-aarch64`
+- **macOS Intel**: `rustfs-macos-x86_64`
+- **Windows x86_64**: `rustfs-windows-x86_64.exe`
+
+This approach reduces download time and storage space by only downloading the binary needed for your current platform.
 
 ## Recommended IDE Setup
 

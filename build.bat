@@ -1,6 +1,6 @@
 @echo off
 REM RustFS Launcher Build Script for Windows
-REM Downloads required binary files before building
+REM Downloads required binary files for Windows platform before building
 
 setlocal enabledelayedexpansion
 
@@ -11,23 +11,31 @@ REM Create directories
 if not exist "%BINARIES_DIR%" mkdir "%BINARIES_DIR%"
 if not exist "%TEMP_DIR%" mkdir "%TEMP_DIR%"
 
-echo Downloading RustFS binaries...
+REM Detect architecture
+set ARCH=%PROCESSOR_ARCHITECTURE%
+if "%ARCH%"=="AMD64" set ARCH=x86_64
+if "%ARCH%"=="x86" set ARCH=x86_64
 
-REM Download URLs
-set MACOS_AARCH64_URL=https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-aarch64-latest.zip
-set MACOS_X86_64_URL=https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-x86_64-latest.zip
+echo Detected platform: Windows %ARCH%
+echo Downloading RustFS binary for Windows platform...
+
+REM Download Windows binary only
 set WINDOWS_X86_64_URL=https://dl.rustfs.com/artifacts/rustfs/release/rustfs-windows-x86_64-latest.zip
 
-REM Function to download and extract binary
-call :download_binary "%MACOS_AARCH64_URL%" "rustfs-macos-aarch64" "rustfs-macos-aarch64"
-call :download_binary "%MACOS_X86_64_URL%" "rustfs-macos-x86_64" "rustfs-macos-x86_64"
-call :download_binary "%WINDOWS_X86_64_URL%" "rustfs-windows-x86_64" "rustfs-windows-x86_64.exe"
+if "%ARCH%"=="x86_64" (
+    echo Downloading for Windows x86_64...
+    call :download_binary "%WINDOWS_X86_64_URL%" "rustfs-windows-x86_64" "rustfs-windows-x86_64.exe"
+) else (
+    echo ✗ Error: Unsupported Windows architecture: %ARCH%
+    echo Only x86_64 is supported
+    exit /b 1
+)
 
 REM Clean up temporary files
 echo Cleaning up temporary files...
 if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%"
 
-echo All binaries downloaded successfully!
+echo Binary downloaded successfully for Windows %ARCH%!
 echo You can now run: cargo tauri build
 goto :eof
 

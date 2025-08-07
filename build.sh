@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # RustFS Launcher Build Script
-# Downloads required binary files before building
+# Downloads required binary files for current platform before building
 
 set -e
 
@@ -12,12 +12,12 @@ TEMP_DIR="temp_downloads"
 mkdir -p "$BINARIES_DIR"
 mkdir -p "$TEMP_DIR"
 
-echo "Downloading RustFS binaries..."
+# Detect platform
+OS=$(uname -s)
+ARCH=$(uname -m)
 
-# Download URLs
-MACOS_AARCH64_URL="https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-aarch64-latest.zip"
-MACOS_X86_64_URL="https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-x86_64-latest.zip"
-WINDOWS_X86_64_URL="https://dl.rustfs.com/artifacts/rustfs/release/rustfs-windows-x86_64-latest.zip"
+echo "Detected platform: $OS $ARCH"
+echo "Downloading RustFS binary for current platform..."
 
 # Function to download and extract binary
 download_binary() {
@@ -58,14 +58,39 @@ download_binary() {
     fi
 }
 
-# Download all binaries
-download_binary "$MACOS_AARCH64_URL" "rustfs-macos-aarch64" "rustfs-macos-aarch64"
-download_binary "$MACOS_X86_64_URL" "rustfs-macos-x86_64" "rustfs-macos-x86_64"
-download_binary "$WINDOWS_X86_64_URL" "rustfs-windows-x86_64" "rustfs-windows-x86_64.exe"
+# Determine which binary to download based on platform
+case "$OS" in
+    "Darwin")
+        case "$ARCH" in
+            "arm64")
+                echo "Downloading for macOS Apple Silicon (aarch64)..."
+                download_binary "https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-aarch64-latest.zip" "rustfs-macos-aarch64" "rustfs-macos-aarch64"
+                ;;
+            "x86_64")
+                echo "Downloading for macOS Intel (x86_64)..."
+                download_binary "https://dl.rustfs.com/artifacts/rustfs/release/rustfs-macos-x86_64-latest.zip" "rustfs-macos-x86_64" "rustfs-macos-x86_64"
+                ;;
+            *)
+                echo "✗ Error: Unsupported macOS architecture: $ARCH"
+                exit 1
+                ;;
+        esac
+        ;;
+    "Linux")
+        echo "✗ Error: Linux platform not supported yet"
+        echo "Please download the appropriate binary manually to $BINARIES_DIR/"
+        exit 1
+        ;;
+    *)
+        echo "✗ Error: Unsupported operating system: $OS"
+        echo "Please use build.bat for Windows or download binaries manually"
+        exit 1
+        ;;
+esac
 
 # Clean up temporary files
 echo "Cleaning up temporary files..."
 rm -rf "$TEMP_DIR"
 
-echo "All binaries downloaded successfully!"
+echo "Binary downloaded successfully for $OS $ARCH!"
 echo "You can now run: cargo tauri build"
