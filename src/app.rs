@@ -2,6 +2,7 @@ use leptos::ev::SubmitEvent;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::VecDeque;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -25,9 +26,6 @@ fn is_tauri() -> bool {
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["console"])]
-    fn log(s: &str);
-
     #[wasm_bindgen(js_namespace = ["window", "__TAURI__", "dialog"])]
     async fn open(options: JsValue) -> JsValue;
 
@@ -62,14 +60,32 @@ enum LogType {
     RustFS,
 }
 
+#[derive(Debug, Deserialize)]
+struct CommandResponse {
+    success: bool,
+    message: String,
+}
+
+const APP_LOG_CAPACITY: usize = 100;
+const RUSTFS_LOG_CAPACITY: usize = 1000;
+
+fn push_log(writer: WriteSignal<VecDeque<String>>, msg: String, capacity: usize) {
+    writer.update(|logs| {
+        logs.push_back(msg);
+        if logs.len() > capacity {
+            logs.pop_front();
+        }
+    });
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (config, set_config) = signal(RustFsConfig::default());
     let (status, set_status) = signal(String::new());
     let (is_running, set_is_running) = signal(false);
     let (show_secret, set_show_secret) = signal(false);
-    let (app_logs, set_app_logs) = signal(Vec::<String>::new());
-    let (rustfs_logs, set_rustfs_logs) = signal(Vec::<String>::new());
+    let (app_logs, set_app_logs) = signal(VecDeque::<String>::new());
+    let (rustfs_logs, set_rustfs_logs) = signal(VecDeque::<String>::new());
     let (current_log_type, set_current_log_type) = signal(LogType::App);
     let logs_ref = NodeRef::<leptos::html::Div>::new();
 
@@ -89,54 +105,38 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let add_app_log = move |msg: String| {
-        set_app_logs.update(|logs| {
-            logs.push(msg);
-            if logs.len() > 100 {
-                logs.remove(0);
-            }
-        });
-    };
+    let logs_ref_clone = logs_ref.clone();
+    let app_log_writer = set_app_logs;
+    let rustfs_log_writer = set_rustfs_logs;
 
-    let add_rustfs_log = move |msg: String| {
-        set_rustfs_logs.update(|logs| {
-            logs.push(msg);
-            if logs.len() > 1000 {
-                logs.remove(0);
-            }
-        });
-    };
-
-    add_app_log("[DEBUG] RustFS Launcher started111".to_string());
-    add_rustfs_log("[DEBUG] RustFS Launcher started222".to_string());
-
-    // Set up real-time event listeners when component mounts (only in Tauri environment)
     spawn_local(async move {
-        // Check if we're in Tauri environment
         if !is_tauri() {
-            add_app_log("[WARN] Not running in Tauri environment - logs disabled".to_string());
+            push_log(
+                app_log_writer,
+                "[WARN] Not running in Tauri environment - logs disabled".to_string(),
+                APP_LOG_CAPACITY,
+            );
             return;
         }
 
-        add_app_log("[DEBUG] Setting up real-time log listeners...".to_string());
+        push_log(
+            app_log_writer,
+            "[DEBUG] Setting up real-time log listeners...".to_string(),
+            APP_LOG_CAPACITY,
+        );
 
         const APP_LOG_EVENT: &str = "app-log";
         const RUSTFS_LOG_EVENT: &str = "rustfs-log";
 
         fn create_log_listener(
-            logs_signal: WriteSignal<Vec<String>>,
+            logs_signal: WriteSignal<VecDeque<String>>,
             max_logs: usize,
             logs_ref: NodeRef<leptos::html::Div>,
         ) -> Closure<dyn FnMut(JsValue)> {
             Closure::wrap(Box::new(move |event: JsValue| {
                 if let Ok(payload) = js_sys::Reflect::get(&event, &"payload".into()) {
                     if let Some(log) = payload.as_string() {
-                        logs_signal.update(|logs| {
-                            logs.push(log);
-                            if logs.len() > max_logs {
-                                logs.remove(0);
-                            }
-                        });
+                        push_log(logs_signal, log, max_logs);
                         if let Some(element) = logs_ref.get() {
                             element.scroll_to_with_x_and_y(0.0, f64::MAX);
                         }
@@ -146,8 +146,13 @@ pub fn App() -> impl IntoView {
         }
 
         if let Some(window) = web_sys::window() {
-            let app_listener = create_log_listener(set_app_logs, 100, logs_ref);
-            let rustfs_listener = create_log_listener(set_rustfs_logs, 1000, logs_ref);
+            let app_listener =
+                create_log_listener(app_log_writer, APP_LOG_CAPACITY, logs_ref_clone.clone());
+            let rustfs_listener = create_log_listener(
+                rustfs_log_writer,
+                RUSTFS_LOG_CAPACITY,
+                logs_ref_clone.clone(),
+            );
 
             if let Ok(tauri) = js_sys::Reflect::get(&window, &"__TAURI__".into()) {
                 if let Ok(event) = js_sys::Reflect::get(&tauri, &"event".into()) {
@@ -172,20 +177,15 @@ pub fn App() -> impl IntoView {
             rustfs_listener.forget();
         }
 
-        // Add initial logs
-        let app_logs_result = tauri_invoke("get_app_logs", js_sys::Object::new().into()).await;
-        if let Some(logs) = app_logs_result.as_string() {
-            if let Ok(logs_vec) = serde_json::from_str::<Vec<String>>(&logs) {
-                set_app_logs.set(logs_vec);
-            }
+        // Fetch initial logs
+        let app_logs_value = tauri_invoke("get_app_logs", js_sys::Object::new().into()).await;
+        if let Ok(logs_vec) = serde_wasm_bindgen::from_value::<Vec<String>>(app_logs_value) {
+            app_log_writer.set(logs_vec.into_iter().collect());
         }
 
-        let rustfs_logs_result =
-            tauri_invoke("get_rustfs_logs", js_sys::Object::new().into()).await;
-        if let Some(logs) = rustfs_logs_result.as_string() {
-            if let Ok(logs_vec) = serde_json::from_str::<Vec<String>>(&logs) {
-                set_rustfs_logs.set(logs_vec);
-            }
+        let rustfs_logs_value = tauri_invoke("get_rustfs_logs", js_sys::Object::new().into()).await;
+        if let Ok(logs_vec) = serde_wasm_bindgen::from_value::<Vec<String>>(rustfs_logs_value) {
+            rustfs_log_writer.set(logs_vec.into_iter().collect());
         }
     });
 
@@ -195,14 +195,26 @@ pub fn App() -> impl IntoView {
         set_status.set("Launching RustFS...".to_string());
 
         let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-        add_app_log(format!("[{}] Launch button clicked", now));
-        add_app_log(format!("[{}] Config: {:?}", now, config.get()));
+        push_log(
+            set_app_logs,
+            format!("[{}] Launch button clicked", now),
+            APP_LOG_CAPACITY,
+        );
+        push_log(
+            set_app_logs,
+            format!("[{}] Config: {:?}", now, config.get()),
+            APP_LOG_CAPACITY,
+        );
 
         spawn_local(async move {
             // Check if we're in Tauri environment
             if !is_tauri() {
                 set_status.set("Error: Not running in Tauri environment".to_string());
-                add_app_log("[ERROR] Not running in Tauri environment".to_string());
+                push_log(
+                    set_app_logs,
+                    "[ERROR] Not running in Tauri environment".to_string(),
+                    APP_LOG_CAPACITY,
+                );
                 set_is_running.set(false);
                 return;
             }
@@ -218,41 +230,61 @@ pub fn App() -> impl IntoView {
             );
 
             let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-            add_app_log(format!(
-                "[{}] Calling tauri_invoke with command: launch_rustfs",
-                now
-            ));
+            push_log(
+                set_app_logs,
+                format!("[{}] Calling tauri_invoke with command: launch_rustfs", now),
+                APP_LOG_CAPACITY,
+            );
 
             // Create args object with config parameter
             let args = js_sys::Object::new();
             let config_js = serde_wasm_bindgen::to_value(&current_config).unwrap();
             js_sys::Reflect::set(&args, &"config".into(), &config_js).unwrap();
 
-            let result = tauri_invoke("launch_rustfs", args.into()).await;
+            let result_value = tauri_invoke("launch_rustfs", args.into()).await;
             let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-            add_app_log(format!("[{}] Invoke result: {:?}", now, result));
+            push_log(
+                set_app_logs,
+                format!("[{}] Invoke result: {:?}", now, result_value),
+                APP_LOG_CAPACITY,
+            );
 
-            if result.is_string() {
-                if let Some(msg) = result.as_string() {
+            match serde_wasm_bindgen::from_value::<CommandResponse>(result_value) {
+                Ok(CommandResponse { success, message }) => {
                     let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-                    add_app_log(format!("[{}] Result message: {}", now, msg));
-                    if msg.contains("success") {
+                    push_log(
+                        set_app_logs,
+                        format!("[{}] Result message: {}", now, message),
+                        APP_LOG_CAPACITY,
+                    );
+
+                    if success {
                         set_status.set("RustFS launched successfully!".to_string());
                         let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-                        add_app_log(format!("[{}] Launch successful!", now));
+                        push_log(
+                            set_app_logs,
+                            format!("[{}] Launch successful!", now),
+                            APP_LOG_CAPACITY,
+                        );
                     } else {
-                        set_status.set(format!("Launch result: {}", msg));
+                        set_status.set(format!("Launch result: {}", message));
                         let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-                        add_app_log(format!("[{}] Launch result: {}", now, msg));
+                        push_log(
+                            set_app_logs,
+                            format!("[{}] Launch result: {}", now, message),
+                            APP_LOG_CAPACITY,
+                        );
                     }
                 }
-            } else {
-                set_status.set("RustFS launch command sent".to_string());
-                let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
-                add_app_log(format!(
-                    "[{}] Launch completed but no message returned",
-                    now
-                ));
+                Err(_) => {
+                    set_status.set("RustFS launch command sent".to_string());
+                    let now = js_sys::Date::new_0().to_locale_time_string("en-US".into());
+                    push_log(
+                        set_app_logs,
+                        format!("[{}] Launch completed but response parsing failed", now),
+                        APP_LOG_CAPACITY,
+                    );
+                }
             }
             set_is_running.set(false);
         });
@@ -414,6 +446,8 @@ pub fn App() -> impl IntoView {
                                     LogType::App => app_logs.get(),
                                     LogType::RustFS => rustfs_logs.get(),
                                 }
+                                .into_iter()
+                                .collect::<Vec<_>>()
                             }
                             key=|log| log.clone()
                             let:log

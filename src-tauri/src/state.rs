@@ -1,12 +1,14 @@
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::VecDeque;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 lazy_static! {
-    pub static ref APP_LOGS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    pub static ref RUSTFS_LOGS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref APP_LOGS: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    pub static ref RUSTFS_LOGS: Arc<Mutex<VecDeque<String>>> =
+        Arc::new(Mutex::new(VecDeque::new()));
     pub static ref APP_HANDLE: Arc<Mutex<Option<AppHandle>>> = Arc::new(Mutex::new(None));
     pub static ref RUSTFS_PROCESS: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
 }
@@ -19,19 +21,26 @@ fn clean_ansi_codes(s: &str) -> String {
     ANSI_REGEX.replace_all(s, "").to_string()
 }
 
-pub fn add_log(logs: &Arc<Mutex<Vec<String>>>, message: String, event_name: &str) {
+fn buffer_log(logs: &Arc<Mutex<VecDeque<String>>>, message: String, capacity: usize) -> String {
     let cleaned_message = clean_ansi_codes(&message);
-    let mut logs = logs.lock().unwrap();
     let log_entry = format!(
         "[{}] {}",
         chrono::Local::now().format("%H:%M:%S"),
         cleaned_message
     );
-    logs.push(log_entry.clone());
-    if logs.len() > 100 {
-        logs.remove(0);
+
+    {
+        let mut logs = logs.lock().unwrap();
+        logs.push_back(log_entry.clone());
+        if logs.len() > capacity {
+            logs.pop_front();
+        }
     }
 
+    log_entry
+}
+
+fn emit_log(event_name: &str, log_entry: String) {
     if let Some(handle) = APP_HANDLE.lock().unwrap().as_ref() {
         if let Some(window) = handle.get_webview_window("main") {
             let _ = window.emit(event_name, log_entry);
@@ -41,13 +50,17 @@ pub fn add_log(logs: &Arc<Mutex<Vec<String>>>, message: String, event_name: &str
 
 const APP_LOG_EVENT: &str = "app-log";
 const RUSTFS_LOG_EVENT: &str = "rustfs-log";
+const APP_LOG_CAPACITY: usize = 100;
+const RUSTFS_LOG_CAPACITY: usize = 1000;
 
 pub fn add_app_log(message: String) {
-    add_log(&APP_LOGS, message, APP_LOG_EVENT);
+    let entry = buffer_log(&APP_LOGS, message, APP_LOG_CAPACITY);
+    emit_log(APP_LOG_EVENT, entry);
 }
 
 pub fn add_rustfs_log(message: String) {
-    add_log(&RUSTFS_LOGS, message, RUSTFS_LOG_EVENT);
+    let entry = buffer_log(&RUSTFS_LOGS, message, RUSTFS_LOG_CAPACITY);
+    emit_log(RUSTFS_LOG_EVENT, entry);
 }
 
 pub fn set_app_handle(handle: AppHandle) {
@@ -55,11 +68,11 @@ pub fn set_app_handle(handle: AppHandle) {
 }
 
 pub fn get_app_logs() -> Vec<String> {
-    APP_LOGS.lock().unwrap().clone()
+    APP_LOGS.lock().unwrap().iter().cloned().collect()
 }
 
 pub fn get_rustfs_logs() -> Vec<String> {
-    RUSTFS_LOGS.lock().unwrap().clone()
+    RUSTFS_LOGS.lock().unwrap().iter().cloned().collect()
 }
 
 pub fn set_rustfs_process(process: Child) {

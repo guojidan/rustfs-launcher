@@ -6,6 +6,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 
+fn inferred_binary_name() -> &'static str {
+    use std::env::consts::{ARCH, OS};
+
+    match (OS, ARCH) {
+        ("macos", "aarch64") => "rustfs-macos-aarch64",
+        ("macos", "x86_64") => "rustfs-macos-x86_64",
+        ("windows", "x86_64") => "rustfs-windows-x86_64.exe",
+        // Windows ARM builds are not published yet; fall back to x86_64 binary.
+        ("windows", "aarch64") => "rustfs-windows-x86_64.exe",
+        _ => "rustfs",
+    }
+}
+
 fn get_binary_path() -> Result<PathBuf> {
     let current_exe = std::env::current_exe().map_err(Error::Io)?;
     let exe_dir = current_exe.parent().ok_or_else(|| {
@@ -14,26 +27,53 @@ fn get_binary_path() -> Result<PathBuf> {
             "Parent directory of executable not found",
         ))
     })?;
-    let binaries_dir = exe_dir.join("binaries");
+    let binary_name = inferred_binary_name();
 
-    let binary_name = if cfg!(target_os = "macos") {
-        "rustfs-macos-aarch64"
-    } else if cfg!(target_os = "windows") {
-        "rustfs-windows-x86_64.exe"
-    } else {
-        "rustfs"
+    let mut candidates = Vec::<PathBuf>::new();
+    let mut push_candidate = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
     };
 
-    let binary_path = binaries_dir.join(binary_name);
-    add_app_log(format!("Resolved binary path: {}", binary_path.display()));
+    push_candidate(exe_dir.join("binaries").join(binary_name));
 
-    if !binary_path.exists() {
-        return Err(Error::BinaryNotFound(
-            binary_path.to_string_lossy().to_string(),
-        ));
+    #[cfg(target_os = "macos")]
+    push_candidate(exe_dir.join("../Resources/binaries").join(binary_name));
+
+    if let Ok(dir) = std::env::var("RUSTFS_BINARY_DIR") {
+        push_candidate(PathBuf::from(dir).join(binary_name));
     }
 
-    Ok(binary_path)
+    if let Ok(cwd) = std::env::current_dir() {
+        push_candidate(cwd.join("src-tauri/binaries").join(binary_name));
+        push_candidate(cwd.join("binaries").join(binary_name));
+    }
+
+    push_candidate(PathBuf::from("src-tauri/binaries").join(binary_name));
+
+    for candidate in &candidates {
+        add_app_log(format!(
+            "Checking RustFS binary candidate: {}",
+            candidate.display()
+        ));
+        if candidate.exists() {
+            add_app_log(format!(
+                "Using RustFS binary for {}-{} at {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                candidate.display()
+            ));
+            return Ok(candidate.clone());
+        }
+    }
+
+    Err(Error::BinaryNotFound(
+        candidates
+            .first()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string()),
+    ))
 }
 
 #[cfg(unix)]
@@ -58,14 +98,14 @@ fn check_permissions(path: &Path) -> Result<()> {
 fn check_permissions(path: &Path) -> Result<()> {
     let metadata = std::fs::metadata(path)
         .map_err(|e| Error::Metadata(path.to_string_lossy().to_string(), e))?;
-    
+
     add_app_log(format!("File size: {} bytes", metadata.len()));
-    
+
     // Check if file is readable
     if metadata.permissions().readonly() {
         add_app_log("WARNING: Binary file is read-only".to_string());
     }
-    
+
     // Check if it's a regular file
     if !metadata.is_file() {
         return Err(Error::Io(std::io::Error::new(
@@ -73,17 +113,20 @@ fn check_permissions(path: &Path) -> Result<()> {
             "Path is not a regular file",
         )));
     }
-    
+
     // Check file extension for Windows executables
     if let Some(extension) = path.extension() {
         let ext = extension.to_string_lossy().to_lowercase();
         if ext != "exe" {
-            add_app_log(format!("WARNING: File does not have .exe extension: {}", ext));
+            add_app_log(format!(
+                "WARNING: File does not have .exe extension: {}",
+                ext
+            ));
         }
     } else {
         add_app_log("WARNING: File has no extension".to_string());
     }
-    
+
     add_app_log("Windows binary permissions check completed".to_string());
     Ok(())
 }

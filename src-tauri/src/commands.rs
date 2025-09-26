@@ -2,10 +2,28 @@ use crate::config::RustFsConfig;
 use crate::error::{Error, Result};
 use crate::process;
 use crate::state;
+use serde::Serialize;
+use std::io::{Error as IoError, ErrorKind};
+use tauri::async_runtime;
+
+#[derive(Debug, Serialize)]
+pub struct CommandResponse {
+    pub success: bool,
+    pub message: String,
+}
 
 #[tauri::command]
-pub async fn launch_rustfs(config: RustFsConfig) -> Result<String> {
-    process::launch(config)
+pub async fn launch_rustfs(config: RustFsConfig) -> Result<CommandResponse> {
+    let handle = async_runtime::spawn_blocking(move || process::launch(config));
+    let message = handle.await.map_err(|err| {
+        let io_error = IoError::new(ErrorKind::Other, err.to_string());
+        Error::Io(io_error)
+    })??;
+
+    Ok(CommandResponse {
+        success: true,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -20,8 +38,17 @@ pub async fn validate_config(config: RustFsConfig) -> Result<bool> {
 }
 
 #[tauri::command]
-pub async fn diagnose_rustfs_binary() -> Result<String> {
-    process::diagnose_binary()
+pub async fn diagnose_rustfs_binary() -> Result<CommandResponse> {
+    let handle = async_runtime::spawn_blocking(process::diagnose_binary);
+    let message = handle.await.map_err(|err| {
+        let io_error = IoError::new(ErrorKind::Other, err.to_string());
+        Error::Io(io_error)
+    })??;
+
+    Ok(CommandResponse {
+        success: true,
+        message,
+    })
 }
 
 #[tauri::command]
